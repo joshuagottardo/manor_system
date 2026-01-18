@@ -6,7 +6,8 @@ class ModernGlassCard extends StatelessWidget {
   final double opacity;
   final double blur;
   final VoidCallback? onTap;
-  final VoidCallback? onLongPress; // <--- NUOVO PARAMETRO
+  final VoidCallback? onLongPress;
+  final VoidCallback? onSecondaryTap; // <--- NUOVO: Per il click destro
   final EdgeInsetsGeometry? padding;
   final EdgeInsetsGeometry? margin;
   final double borderRadius;
@@ -18,7 +19,8 @@ class ModernGlassCard extends StatelessWidget {
     this.opacity = 0.05,
     this.blur = 20.0,
     this.onTap,
-    this.onLongPress, // <--- LO AGGIUNGIAMO QUI
+    this.onLongPress,
+    this.onSecondaryTap, // <--- LO INSERIAMO QUI
     this.padding,
     this.margin,
     this.borderRadius = 24.0,
@@ -37,7 +39,8 @@ class ModernGlassCard extends StatelessWidget {
             color: Colors.transparent,
             child: InkWell(
               onTap: onTap,
-              onLongPress: onLongPress, // <--- LO PASSIAMO ALL'INKWELL
+              onLongPress: onLongPress,
+              onSecondaryTap: onSecondaryTap, // <--- LO PASSIAMO ALL'INKWELL
               splashColor: Colors.white.withOpacity(0.1),
               highlightColor: Colors.white.withOpacity(0.05),
               borderRadius: BorderRadius.circular(borderRadius),

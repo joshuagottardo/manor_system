@@ -9,8 +9,6 @@ import '../services/backend_service.dart';
 import '../utils/icon_helper.dart';
 import 'modern_glass_card.dart';
 import '../config/app_theme.dart';
-
-// Import Modali
 import 'device_control_modal.dart';
 import 'camera_stream_modal.dart';
 import 'tv_control_modal.dart';
@@ -43,7 +41,7 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
   // Stato per evidenziare il target del drop
   int? _targetDeviceId;
 
-  // --- LOGICA SWAP (Scambio Posizione) ---
+  // --- LOGICA SWAP ---
   Future<void> _handleSwap(DeviceConfig source, DeviceConfig target) async {
     if (source.id == target.id) return;
 
@@ -56,7 +54,7 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
     final tX = target.gridX;
     final tY = target.gridY;
 
-    // Aggiorniamo backend (Optimistic UI: il socket poi confermerà)
+    // Aggiorniamo backend
     await BackendService().updateDeviceGridPosition(source.id, tX, tY);
     await BackendService().updateDeviceGridPosition(target.id, sX, sY);
 
@@ -105,8 +103,6 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
 
   @override
   Widget build(BuildContext context) {
-    // 1. Ordiniamo i dispositivi per garantire che appaiano nell'ordine "visivo" corretto
-    // (Dall'alto in basso, da sinistra a destra)
     final sortedDevices = List<DeviceConfig>.from(widget.devices)
       ..sort((a, b) {
         if (a.gridY != b.gridY) return a.gridY.compareTo(b.gridY);
@@ -149,7 +145,7 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
     );
   }
 
-  // --- WRAPPER DRAG & DROP CORRETTO ---
+  // --- WRAPPER DRAG & DROP ---
   Widget _buildDraggableWrapper(DeviceConfig device, Widget child) {
     return DragTarget<DeviceConfig>(
       // 1. "onEnter" non esiste. Usiamo onWillAcceptWithDetails per:
@@ -226,7 +222,6 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
     );
   }
 
-  // --- BUILD TILE (Stessa logica grafica di prima) ---
   Widget _buildDeviceTile(BuildContext context, DeviceConfig device) {
     final stateData = widget.entityStates[device.haEntityId];
     final bool isOn = IconHelper.isActive(stateData);
@@ -234,9 +229,50 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
     final IconData icon = IconHelper.getIcon(device.type, stateData);
     final Color iconColor = isOn ? color : const Color(0xFFE0E0E0);
 
+    // --- 1. DEFINIZIONE DEL TIPO DI WIDGET E LOGICA INTERAZIONE ---
+
+    // È una "Tower" 2x4?
+    final bool isTower = (device.gridW == 2 && device.gridH == 4);
+
+    // È un dispositivo complesso? (Apre sempre il modale)
+    final bool isComplex = [
+      'climate',
+      'media_player',
+      'camera',
+      'lock',
+      'sensor',
+    ].contains(device.type);
+
+    // LOGICA ACTION:
+    // onTap:
+    //  - Se EditMode -> Null (gestito dal wrapper drag)
+    //  - Se Tower -> Null (Il tap singolo non fa nulla al contenitore, faremo pulsanti interni)
+    //  - Se Complesso -> Apre Modale
+    //  - Se Semplice -> Toggle ON/OFF
+    VoidCallback? handleTap;
+    if (!widget.isEditMode) {
+      if (isTower) {
+        handleTap = null;
+      } else if (isComplex) {
+        handleTap = () => _openDeviceDetails(device);
+      } else {
+        handleTap = () =>
+            ref.read(haServiceProvider).toggleEntity(device.haEntityId);
+      }
+    }
+
+    // onLongPress / RightClick:
+    //  - Sempre Apri Modale (eccetto in EditMode)
+    VoidCallback? handleDetails;
+    if (!widget.isEditMode) {
+      handleDetails = () => _openDeviceDetails(device);
+    }
+
+    // --- 2. COSTRUZIONE CONTENUTO GRAFICO ---
     Widget innerContent;
 
     if (device.gridW == 1 && device.gridH == 1) {
+      // 1x1
       innerContent = Center(
         child: FittedBox(
           fit: BoxFit.scaleDown,
@@ -244,6 +280,7 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
         ),
       );
     } else if (device.gridW == 1 && device.gridH > 1) {
+      // 1x2 (Verticale stretto)
       innerContent = Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -262,7 +299,49 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
           const Spacer(),
         ],
       );
+    } else if (isTower) {
+      // 2x4 TOWER (Speciale)
+      // Qui in futuro metterai slider e controlli diretti.
+      // Per ora mostriamo icona in alto e nome in basso.
+      innerContent = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header Torre
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.2),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: color, size: 20),
+              ),
+              const Spacer(),
+              const Icon(
+                Icons.more_vert,
+                color: Colors.white24,
+                size: 16,
+              ), // Hint visivo per menu
+            ],
+          ),
+          const Spacer(),
+          Text(
+            device.friendlyName.toUpperCase(),
+            style: GoogleFonts.outfit(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 16,
+            ),
+          ),
+          Text(
+            isOn ? "ATTIVO" : "SPENTO",
+            style: GoogleFonts.montserrat(color: Colors.white54, fontSize: 12),
+          ),
+        ],
+      );
     } else {
+      // STANDARD (2x1, 2x2, etc.)
       innerContent = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
@@ -300,15 +379,16 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
       );
     }
 
-    Widget content = ModernGlassCard(
+    return ModernGlassCard(
       padding: EdgeInsets.zero,
       opacity: isOn ? 0.12 : 0.08,
-      onTap: widget.isEditMode
-          ? null
-          : () => ref.read(haServiceProvider).toggleEntity(device.haEntityId),
-      onLongPress: widget.isEditMode ? null : () => _openDeviceDetails(device),
+
+      onTap: handleTap, // Tap: Toggle (Simple) o Modal (Complex) o Null (Tower)
+      onLongPress: handleDetails, // Long: Sempre Modal
+      onSecondaryTap: handleDetails, // Right Click: Sempre Modal
+
       child: Container(
-        padding: const EdgeInsets.all(10),
+        padding: const EdgeInsets.all(12),
         width: double.infinity,
         height: double.infinity,
         decoration: BoxDecoration(
@@ -321,8 +401,9 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
         ),
         child: Stack(
           children: [
-            Center(child: innerContent), // Centra il contenuto
-            // Pulsante Resize (Solo Edit Mode)
+            // Contenuto centrato o allineato
+            Positioned.fill(child: innerContent),
+
             if (widget.isEditMode)
               Positioned(
                 right: -8,
@@ -331,7 +412,7 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
                   onTap: () => _showResizeDialog(context, device),
                   child: Container(
                     padding: const EdgeInsets.all(12),
-                    color: Colors.transparent, // Hitbox aumentata
+                    color: Colors.transparent,
                     child: Container(
                       padding: const EdgeInsets.all(6),
                       decoration: BoxDecoration(
@@ -351,11 +432,9 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
         ),
       ),
     );
-
-    return content;
   }
 
-  // --- ACTIONS & DIALOGS (Invariati) ---
+  // --- ACTIONS & DIALOGS ---
   Widget _buildBottomActions() {
     return SizedBox(
       height: 70,
@@ -411,7 +490,7 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
     );
   }
 
-  // --- RESIZE DIALOG AGGIORNATO ---
+  // --- RESIZE DIALOG ---
   void _showResizeDialog(BuildContext context, DeviceConfig device) {
     showDialog(
       context: context,
@@ -522,7 +601,6 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
   }
 }
 
-// Helpers
 class _ResizeOption extends StatelessWidget {
   final int w, h;
   final String label;

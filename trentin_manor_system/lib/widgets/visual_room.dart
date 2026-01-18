@@ -135,16 +135,40 @@ class VisualRoom extends ConsumerWidget {
     final bool isOn = IconHelper.isActive(state);
     final Color activeColor = IconHelper.getColor(device.type, state);
     final IconData icon = IconHelper.getIcon(device.type, state);
+    final bool isComplex = [
+      'climate',
+      'media_player',
+      'camera',
+      'lock',
+      'sensor',
+    ].contains(device.type);
+
+    VoidCallback? handleTap;
+    VoidCallback? handleDetails;
+
+    if (!isEditMode) {
+      if (isComplex) {
+        handleTap = () =>
+            _handleDeviceTap(context, ref, device, state);
+      } else {
+        handleTap = () => ref
+            .read(haServiceProvider)
+            .toggleEntity(device.haEntityId);
+      }
+
+      handleDetails = () => _handleDeviceTap(context, ref, device, state);
+    }
+    // --- FINE LOGICA ---
 
     Widget marker = GestureDetector(
-      onTap: () {
-        if (!isEditMode) {
-          _handleDeviceTap(context, ref, device, state);
-        }
-      },
+      // Gestione Gesture Unificata
+      onTap: handleTap,
       onLongPress: isEditMode && onDeviceDelete != null
-          ? () => onDeviceDelete!(device.id)
-          : null,
+          ? () =>
+                onDeviceDelete!(device.id) // Cancellazione in edit mode
+          : handleDetails, // Modale in normal mode
+      onSecondaryTap: handleDetails, // Click Destro -> Modale
+
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 300),
         width: 44,
@@ -162,9 +186,9 @@ class VisualRoom extends ConsumerWidget {
           boxShadow: isOn
               ? [
                   BoxShadow(
-                    color: activeColor.withOpacity(0.6),
-                    blurRadius: 12,
-                    spreadRadius: 1,
+                    color: activeColor.withOpacity(0.5),
+                    blurRadius: 10,
+                    spreadRadius: 2,
                   ),
                 ]
               : [
@@ -187,13 +211,10 @@ class VisualRoom extends ConsumerWidget {
           final RenderBox parentBox = context
               .findAncestorRenderObjectOfType<RenderBox>()!;
           final Offset localOffset = parentBox.globalToLocal(details.offset);
-
           double newX = localOffset.dx / mapW;
           double newY = localOffset.dy / mapH;
-
           newX = newX.clamp(0.0, 1.0);
           newY = newY.clamp(0.0, 1.0);
-
           onDragEnd?.call(device.id, newX, newY);
         },
         onDragUpdate: (details) {
