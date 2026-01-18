@@ -1,6 +1,7 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart'; // <--- NUOVA LIBRERIA
 import 'package:google_fonts/google_fonts.dart';
 import '../models/app_models.dart';
 import '../providers/app_providers.dart';
@@ -8,6 +9,8 @@ import '../services/backend_service.dart';
 import '../utils/icon_helper.dart';
 import 'modern_glass_card.dart';
 import '../config/app_theme.dart';
+
+// Import Modali
 import 'device_control_modal.dart';
 import 'camera_stream_modal.dart';
 import 'tv_control_modal.dart';
@@ -37,13 +40,32 @@ class ControlCenterPanel extends ConsumerStatefulWidget {
 }
 
 class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
-  final int columns = 4;
-  final double spacing = 12.0;
+  // Stato per evidenziare il target del drop
+  int? _targetDeviceId;
 
-  int? _dragTargetX;
-  int? _dragTargetY;
-  bool _isDragCollision = false;
+  // --- LOGICA SWAP (Scambio Posizione) ---
+  Future<void> _handleSwap(DeviceConfig source, DeviceConfig target) async {
+    if (source.id == target.id) return;
 
+    // 1. Scambiamo le coordinate nel DB
+    // Assegniamo a Source le coordinate di Target e viceversa.
+    // In un layout "packed" questo cambierà il loro ordine di visualizzazione.
+
+    final sX = source.gridX;
+    final sY = source.gridY;
+    final tX = target.gridX;
+    final tY = target.gridY;
+
+    // Aggiorniamo backend (Optimistic UI: il socket poi confermerà)
+    await BackendService().updateDeviceGridPosition(source.id, tX, tY);
+    await BackendService().updateDeviceGridPosition(target.id, sX, sY);
+
+    setState(() {
+      _targetDeviceId = null;
+    });
+  }
+
+  // --- LOGICA APERTURA MODALI ---
   void _openDeviceDetails(DeviceConfig device) {
     final state = widget.entityStates[device.haEntityId];
     if (state == null) return;
@@ -55,7 +77,6 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
       );
     } else if (device.type == 'media_player') {
       final devClass = state['attributes']['device_class'];
-      // Se è uno speaker o non è definito bene, apriamo controllo speaker
       if (devClass == 'speaker') {
         showModalBottomSheet(
           context: context,
@@ -65,7 +86,6 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
               SpeakerControlModal(device: device, currentState: state),
         );
       } else {
-        // Altrimenti assumiamo sia una TV
         showModalBottomSheet(
           context: context,
           isScrollControlled: true,
@@ -74,7 +94,6 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
         );
       }
     } else {
-      // Luci, Clima, Switch, etc.
       showModalBottomSheet(
         context: context,
         isScrollControlled: true,
@@ -86,260 +105,133 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final double panelWidth = constraints.maxWidth;
-        final double cellW = (panelWidth - (spacing * (columns - 1))) / columns;
-        final double cellH = cellW;
+    // 1. Ordiniamo i dispositivi per garantire che appaiano nell'ordine "visivo" corretto
+    // (Dall'alto in basso, da sinistra a destra)
+    final sortedDevices = List<DeviceConfig>.from(widget.devices)
+      ..sort((a, b) {
+        if (a.gridY != b.gridY) return a.gridY.compareTo(b.gridY);
+        return a.gridX.compareTo(b.gridX);
+      });
 
-        int maxRow = 0;
-        for (var d in widget.devices) {
-          int bottom = d.gridY + d.gridH;
-          if (bottom > maxRow) maxRow = bottom;
+    return Column(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.only(
+              bottom: 100,
+            ), // Spazio per scrollare oltre
+            child: StaggeredGrid.count(
+              crossAxisCount: 4, // 4 Colonne fisse
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              children: sortedDevices.map((device) {
+                // Costruiamo il Tile
+                Widget tile = _buildDeviceTile(context, device);
+
+                // Se siamo in Edit Mode, avvolgiamo con Drag & Drop
+                if (widget.isEditMode) {
+                  tile = _buildDraggableWrapper(device, tile);
+                }
+
+                return StaggeredGridTile.count(
+                  crossAxisCellCount: device.gridW,
+                  mainAxisCellCount: device.gridH,
+                  child: tile,
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        _buildBottomActions(),
+      ],
+    );
+  }
+
+  // --- WRAPPER DRAG & DROP CORRETTO ---
+  Widget _buildDraggableWrapper(DeviceConfig device, Widget child) {
+    return DragTarget<DeviceConfig>(
+      // 1. "onEnter" non esiste. Usiamo onWillAcceptWithDetails per:
+      //    A. Decidere se accettare il drop (return true/false)
+      //    B. Attivare l'effetto grafico (setState)
+      onWillAcceptWithDetails: (details) {
+        final isDifferent = details.data.id != device.id;
+
+        // Se è un dispositivo diverso (quindi valido per lo scambio), evidenziamo la cella
+        if (isDifferent && _targetDeviceId != device.id) {
+          setState(() => _targetDeviceId = device.id);
         }
-        if (widget.isEditMode) maxRow += 4;
 
-        final double contentHeight = (maxRow * (cellH + spacing)) + 50;
+        return isDifferent;
+      },
 
-        return Column(
-          children: [
-            Expanded(
-              child: SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                child: SizedBox(
-                  height: contentHeight,
-                  width: panelWidth,
-                  child: Stack(
-                    children: [
-                      if (widget.isEditMode)
-                        Positioned.fill(
-                          child: CustomPaint(
-                            painter: _GridGuidePainter(
-                              cols: columns,
-                              cellW: cellW,
-                              cellH: cellH,
-                              gap: spacing,
-                            ),
-                          ),
-                        ),
+      // 2. Quando esce dall'area, spegniamo l'effetto grafico
+      onLeave: (_) {
+        if (_targetDeviceId == device.id) {
+          setState(() => _targetDeviceId = null);
+        }
+      },
 
-                      ...widget.devices.map((device) {
-                        final double w =
-                            (device.gridW * cellW) +
-                            ((device.gridW - 1) * spacing);
-                        final double h =
-                            (device.gridH * cellH) +
-                            ((device.gridH - 1) * spacing);
+      // 3. Quando rilascia il dito (DROP avvenuto)
+      onAcceptWithDetails: (details) {
+        _handleSwap(details.data, device);
+        // Resettiamo l'evidenziazione dopo lo scambio
+        setState(() => _targetDeviceId = null);
+      },
 
-                        return Positioned(
-                          left: device.gridX * (cellW + spacing),
-                          top: device.gridY * (cellH + spacing),
-                          width: w,
-                          height: h,
-                          child: _buildDeviceTile(
-                            context,
-                            device,
-                            cellW,
-                            cellH,
-                            spacing,
-                          ),
-                        );
-                      }),
+      builder: (context, candidateData, rejectedData) {
+        // Controlliamo se QUESTO è il target attivo
+        final bool isHovered = _targetDeviceId == device.id;
 
-                      if (widget.isEditMode)
-                        Positioned.fill(
-                          child: DragTarget<DeviceConfig>(
-                            onWillAccept: (_) => true,
-                            onMove: (details) {
-                              final RenderBox box =
-                                  context.findRenderObject() as RenderBox;
-                              final localPos = box.globalToLocal(
-                                details.offset,
-                              );
-
-                              int tx = (localPos.dx / (cellW + spacing))
-                                  .floor();
-                              int ty = (localPos.dy / (cellH + spacing))
-                                  .floor();
-
-                              if (tx < 0) tx = 0;
-                              if (tx > columns - (details.data.gridW))
-                                tx = columns - details.data.gridW;
-                              if (ty < 0) ty = 0;
-
-                              bool collision = _checkCollision(
-                                tx,
-                                ty,
-                                details.data,
-                              );
-
-                              if (_dragTargetX != tx ||
-                                  _dragTargetY != ty ||
-                                  _isDragCollision != collision) {
-                                setState(() {
-                                  _dragTargetX = tx;
-                                  _dragTargetY = ty;
-                                  _isDragCollision = collision;
-                                });
-                              }
-                            },
-                            onLeave: (_) => setState(() {
-                              _dragTargetX = null;
-                              _dragTargetY = null;
-                            }),
-                            onAccept: (device) {
-                              if (_dragTargetX != null &&
-                                  _dragTargetY != null &&
-                                  !_isDragCollision) {
-                                _updatePosition(
-                                  device,
-                                  _dragTargetX!,
-                                  _dragTargetY!,
-                                );
-                              }
-                              setState(() {
-                                _dragTargetX = null;
-                                _dragTargetY = null;
-                              });
-                            },
-                            builder: (context, candidates, rejects) {
-                              if (_dragTargetX != null &&
-                                  _dragTargetY != null &&
-                                  candidates.isNotEmpty) {
-                                final device = candidates.first!;
-                                return Positioned(
-                                  left: _dragTargetX! * (cellW + spacing),
-                                  top: _dragTargetY! * (cellH + spacing),
-                                  width:
-                                      (device.gridW * cellW) +
-                                      ((device.gridW - 1) * spacing),
-                                  height:
-                                      (device.gridH * cellH) +
-                                      ((device.gridH - 1) * spacing),
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      color: _isDragCollision
-                                          ? Colors.red.withOpacity(0.3)
-                                          : Colors.greenAccent.withOpacity(0.3),
-                                      borderRadius: BorderRadius.circular(24),
-                                      border: Border.all(
-                                        color: _isDragCollision
-                                            ? Colors.red
-                                            : Colors.greenAccent,
-                                        width: 2,
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              }
-                              return const SizedBox();
-                            },
-                          ),
-                        ),
-                    ],
+        return LongPressDraggable<DeviceConfig>(
+          data: device,
+          delay: const Duration(milliseconds: 200),
+          // Feedback mentre trascini (il "fantasma")
+          feedback: Material(
+            color: Colors.transparent,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 150, maxHeight: 150),
+              child: Opacity(
+                opacity: 0.8,
+                child: ModernGlassCard(
+                  opacity: 0.3,
+                  child: const Center(
+                    child: Icon(Icons.touch_app, color: Colors.white, size: 40),
                   ),
                 ),
               ),
             ),
-            const SizedBox(height: 10),
-            _buildBottomActions(),
-          ],
+          ),
+          // Cosa mostrare al posto dell'originale mentre trascini
+          childWhenDragging: Opacity(opacity: 0.3, child: child),
+          // Il widget normale (con animazione scale se ci passano sopra)
+          child: AnimatedScale(
+            scale: isHovered ? 1.05 : 1.0,
+            duration: const Duration(milliseconds: 200),
+            child: Container(
+              decoration: isHovered
+                  ? BoxDecoration(
+                      border: Border.all(color: AppTheme.accent, width: 2),
+                      borderRadius: BorderRadius.circular(24),
+                      // Aggiungiamo un leggero sfondo per evidenziare meglio
+                      color: AppTheme.accent.withOpacity(0.1),
+                    )
+                  : null,
+              child: child,
+            ),
+          ),
         );
       },
     );
   }
 
-  bool _checkCollision(int targetX, int targetY, DeviceConfig draggingDevice) {
-    final Rect targetRect = Rect.fromLTWH(
-      targetX.toDouble(),
-      targetY.toDouble(),
-      draggingDevice.gridW.toDouble(),
-      draggingDevice.gridH.toDouble(),
-    );
-    for (var other in widget.devices) {
-      if (other.id == draggingDevice.id) continue;
-      final Rect otherRect = Rect.fromLTWH(
-        other.gridX.toDouble(),
-        other.gridY.toDouble(),
-        other.gridW.toDouble(),
-        other.gridH.toDouble(),
-      );
-      if (targetRect.overlaps(otherRect)) return true;
-    }
-    return false;
-  }
-
-  void _updatePosition(DeviceConfig device, int x, int y) {
-    BackendService().updateDeviceGridPosition(device.id, x, y);
-  }
-
-  Widget _buildBottomActions() {
-    return SizedBox(
-      height: 70,
-      child: Row(
-        children: [
-          Expanded(
-            child: ModernGlassCard(
-              onTap: widget.onEditModeToggle,
-              opacity: widget.isEditMode ? 0.15 : 0.05,
-              child: Center(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      widget.isEditMode ? Icons.check : Icons.edit,
-                      color: widget.isEditMode
-                          ? AppTheme.accent
-                          : Colors.white70,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      widget.isEditMode ? "FATTO" : "MODIFICA",
-                      style: GoogleFonts.outfit(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          ModernGlassCard(
-            onTap: widget.onAddDevice,
-            opacity: 0.1,
-            child: const Center(child: Icon(Icons.add, color: Colors.white)),
-          ),
-          if (widget.isEditMode && widget.onDeleteRoom != null) ...[
-            const SizedBox(width: 12),
-            ModernGlassCard(
-              onTap: widget.onDeleteRoom,
-              opacity: 0.1,
-              child: const Center(
-                child: Icon(Icons.delete_forever, color: Colors.redAccent),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDeviceTile(
-    BuildContext context,
-    DeviceConfig device,
-    double cellW,
-    double cellH,
-    double gap,
-  ) {
+  // --- BUILD TILE (Stessa logica grafica di prima) ---
+  Widget _buildDeviceTile(BuildContext context, DeviceConfig device) {
     final stateData = widget.entityStates[device.haEntityId];
     final bool isOn = IconHelper.isActive(stateData);
     final Color color = IconHelper.getColor(device.type, stateData);
     final IconData icon = IconHelper.getIcon(device.type, stateData);
-
     final Color iconColor = isOn ? color : const Color(0xFFE0E0E0);
 
     Widget innerContent;
@@ -411,17 +303,10 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
     Widget content = ModernGlassCard(
       padding: EdgeInsets.zero,
       opacity: isOn ? 0.12 : 0.08,
-
-      // AZIONE 1: TAP SINGOLO (Toggle)
       onTap: widget.isEditMode
           ? null
           : () => ref.read(haServiceProvider).toggleEntity(device.haEntityId),
-
-      // AZIONE 2: LONG PRESS (Apre Modale)
-      onLongPress: widget.isEditMode
-          ? null
-          : () => _openDeviceDetails(device), // <--- ECCOLO!
-
+      onLongPress: widget.isEditMode ? null : () => _openDeviceDetails(device),
       child: Container(
         padding: const EdgeInsets.all(10),
         width: double.infinity,
@@ -434,60 +319,99 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
             width: 1,
           ),
         ),
-        child: innerContent,
+        child: Stack(
+          children: [
+            Center(child: innerContent), // Centra il contenuto
+            // Pulsante Resize (Solo Edit Mode)
+            if (widget.isEditMode)
+              Positioned(
+                right: -8,
+                bottom: -8,
+                child: GestureDetector(
+                  onTap: () => _showResizeDialog(context, device),
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    color: Colors.transparent, // Hitbox aumentata
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(
+                        Icons.aspect_ratio,
+                        size: 14,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
 
-    if (widget.isEditMode) {
-      final double feedbackW =
-          (device.gridW * cellW) + ((device.gridW - 1) * gap);
-      final double feedbackH =
-          (device.gridH * cellH) + ((device.gridH - 1) * gap);
-
-      return Stack(
-        children: [
-          LongPressDraggable<DeviceConfig>(
-            data: device,
-            delay: const Duration(milliseconds: 150),
-            feedback: Material(
-              color: Colors.transparent,
-              child: SizedBox(
-                width: feedbackW,
-                height: feedbackH,
-                child: Opacity(opacity: 0.8, child: content),
-              ),
-            ),
-            childWhenDragging: Opacity(opacity: 0.3, child: content),
-            child: content,
-          ),
-          Positioned(
-            right: 0,
-            bottom: 0,
-            child: GestureDetector(
-              onTap: () => _showResizeDialog(context, device),
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.15),
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(16),
-                    bottomRight: Radius.circular(24),
-                  ),
-                ),
-                child: const Icon(
-                  Icons.aspect_ratio,
-                  size: 16,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ),
-        ],
-      );
-    }
     return content;
   }
 
+  // --- ACTIONS & DIALOGS (Invariati) ---
+  Widget _buildBottomActions() {
+    return SizedBox(
+      height: 70,
+      child: Row(
+        children: [
+          Expanded(
+            child: ModernGlassCard(
+              onTap: widget.onEditModeToggle,
+              opacity: widget.isEditMode ? 0.15 : 0.05,
+              child: Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      widget.isEditMode ? Icons.check : Icons.edit,
+                      color: widget.isEditMode
+                          ? AppTheme.accent
+                          : Colors.white70,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      widget.isEditMode ? "FATTO" : "MODIFICA",
+                      style: GoogleFonts.outfit(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          ModernGlassCard(
+            onTap: widget.onAddDevice,
+            opacity: 0.1,
+            child: const Center(child: Icon(Icons.add, color: Colors.white)),
+          ),
+          if (widget.isEditMode && widget.onDeleteRoom != null) ...[
+            const SizedBox(width: 12),
+            ModernGlassCard(
+              onTap: widget.onDeleteRoom,
+              opacity: 0.1,
+              child: const Center(
+                child: Icon(Icons.delete_forever, color: Colors.redAccent),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // --- RESIZE DIALOG AGGIORNATO ---
   void _showResizeDialog(BuildContext context, DeviceConfig device) {
     showDialog(
       context: context,
@@ -521,11 +445,14 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
                     ),
                   ),
                   const SizedBox(height: 30),
+
+                  // WRAP CON LE 5 OPZIONI RICHIESTE
                   Wrap(
-                    spacing: 15,
-                    runSpacing: 15,
+                    spacing: 12,
+                    runSpacing: 12,
                     alignment: WrapAlignment.center,
                     children: [
+                      // 1. Piccola (1x1)
                       _ResizeOption(
                         w: 1,
                         h: 1,
@@ -534,14 +461,18 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
                         device: device,
                         ctx: ctx,
                       ),
+
+                      // 2. Orizzontale (2x1) - NUOVA
                       _ResizeOption(
                         w: 2,
-                        h: 2,
-                        label: "2x2",
-                        icon: Icons.grid_view,
+                        h: 1,
+                        label: "2x1",
+                        icon: Icons.crop_landscape,
                         device: device,
                         ctx: ctx,
                       ),
+
+                      // 3. Verticale (1x2)
                       _ResizeOption(
                         w: 1,
                         h: 2,
@@ -550,16 +481,29 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
                         device: device,
                         ctx: ctx,
                       ),
+
+                      // 4. Grande (2x2)
                       _ResizeOption(
                         w: 2,
-                        h: 4,
-                        label: "2x4 (Tower)",
+                        h: 2,
+                        label: "2x2",
+                        icon: Icons.grid_view,
+                        device: device,
+                        ctx: ctx,
+                      ),
+
+                      // 5. Tower (2x4)
+                      _ResizeOption(
+                        w: 4,
+                        h: 2,
+                        label: "Tower",
                         icon: Icons.view_week,
                         device: device,
                         ctx: ctx,
                       ),
                     ],
                   ),
+
                   const SizedBox(height: 30),
                   TextButton(
                     onPressed: () => Navigator.pop(ctx),
@@ -578,9 +522,9 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
   }
 }
 
+// Helpers
 class _ResizeOption extends StatelessWidget {
-  final int w;
-  final int h;
+  final int w, h;
   final String label;
   final IconData icon;
   final DeviceConfig device;
@@ -598,7 +542,6 @@ class _ResizeOption extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool isSelected = device.gridW == w && device.gridH == h;
-
     return GestureDetector(
       onTap: () {
         BackendService().updateDeviceGridSize(device.id, w, h);
@@ -641,38 +584,4 @@ class _ResizeOption extends StatelessWidget {
       ),
     );
   }
-}
-
-class _GridGuidePainter extends CustomPainter {
-  final int cols;
-  final double cellW;
-  final double cellH;
-  final double gap;
-  _GridGuidePainter({
-    required this.cols,
-    required this.cellW,
-    required this.cellH,
-    required this.gap,
-  });
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white.withOpacity(0.05)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-    for (int i = 0; i < cols; i++) {
-      for (int j = 0; j < 30; j++) {
-        final double left = i * (cellW + gap);
-        final double top = j * (cellH + gap);
-        final rrect = RRect.fromRectAndRadius(
-          Rect.fromLTWH(left, top, cellW, cellH),
-          const Radius.circular(24),
-        );
-        canvas.drawRRect(rrect, paint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
