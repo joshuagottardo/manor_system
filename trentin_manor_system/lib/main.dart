@@ -3,8 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'config/app_theme.dart';
 import 'providers/app_providers.dart';
-import 'screens/tablet_layout.dart'; // Assicurati di avere questo import o DashboardSelector
-import 'screens/phone_layout.dart';  // Idem
+import 'screens/tablet_layout.dart';
+import 'screens/phone_layout.dart';
 import 'screens/splash_screen.dart';
 
 Future<void> main() async {

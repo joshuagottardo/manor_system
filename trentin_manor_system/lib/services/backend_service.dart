@@ -1,13 +1,11 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/app_models.dart';
-import '../config/app_config.dart'; // <--- Qui prendiamo la nuova config
+import '../config/app_config.dart';
 
 class BackendService {
   
   // Helper privato per ottenere l'URL
-  // Nota: In futuro potremmo collegare questo al ConnectionManager per usare 
-  // l'IP locale (192.168...) quando sei a casa, velocizzando anche queste chiamate.
   String get _baseUrl => AppConfig.backendUrl;
 
   // 1. Scarica tutte le stanze e i dispositivi
@@ -15,14 +13,14 @@ class BackendService {
     final url = Uri.parse('$_baseUrl/rooms');
 
     try {
-      print('📥 Backend: Scarico configurazione da $url');
+      // print('📥 Backend: Scarico configurazione da $url');
       final response = await http.get(url);
 
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
         return data.map((json) => RoomConfig.fromJson(json)).toList();
       } else {
-        throw Exception('Errore server: ${response.statusCode} - ${response.reasonPhrase}');
+        throw Exception('Errore server: ${response.statusCode}');
       }
     } catch (e) {
       print('❌ Errore Backend getRooms: $e');
@@ -30,7 +28,7 @@ class BackendService {
     }
   }
 
-  // 2. Salva la posizione (Drag & Drop)
+  // 2. Salva la posizione MAPPA VISUALE (Tablet - Float X/Y)
   Future<void> updateDevicePosition(int deviceId, double x, double y) async {
     final url = Uri.parse('$_baseUrl/devices/$deviceId/position');
 
@@ -40,19 +38,13 @@ class BackendService {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'x': x, 'y': y}),
       );
-      // Non stampiamo nulla per non intasare la console durante il drag & drop
     } catch (e) {
-      print('❌ Errore salvataggio posizione: $e');
+      print('❌ Errore Backend updateDevicePosition: $e');
     }
   }
 
-  // 3. Aggiungi nuovo dispositivo al DB
-  Future<DeviceConfig> addDevice(
-    int roomId,
-    String haEntityId,
-    String friendlyName,
-    String type,
-  ) async {
+  // 3. Aggiungi dispositivo
+  Future<DeviceConfig> addDevice(int roomId, String entityId, String friendlyName, String type) async {
     final url = Uri.parse('$_baseUrl/devices');
 
     try {
@@ -61,7 +53,7 @@ class BackendService {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'room_id': roomId,
-          'ha_entity_id': haEntityId,
+          'ha_entity_id': entityId,
           'friendly_name': friendlyName,
           'device_type': type,
         }),
@@ -123,6 +115,39 @@ class BackendService {
     } catch (e) {
       print('❌ Errore Backend deleteRoom: $e');
       rethrow;
+    }
+  }
+
+  // --- METODI PER IL CENTRO DI CONTROLLO (GRIGLIA) ---
+
+  // 7. Aggiorna DIMENSIONE Griglia (Resize W/H)
+  Future<void> updateDeviceGridSize(int deviceId, int w, int h) async {
+    final url = Uri.parse('$_baseUrl/devices/$deviceId/resize');
+
+    try {
+      await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'w': w, 'h': h}),
+      );
+    } catch (e) {
+      print('❌ Errore Backend updateDeviceGridSize: $e');
+      // Fire & Forget: non blocchiamo l'UI
+    }
+  }
+
+  // 8. Aggiorna POSIZIONE Griglia (Spostamento X/Y Interi)
+  Future<void> updateDeviceGridPosition(int deviceId, int x, int y) async {
+    final url = Uri.parse('$_baseUrl/devices/$deviceId/grid_position');
+
+    try {
+      await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'x': x, 'y': y}),
+      );
+    } catch (e) {
+      print('❌ Errore Backend updateDeviceGridPosition: $e');
     }
   }
 }

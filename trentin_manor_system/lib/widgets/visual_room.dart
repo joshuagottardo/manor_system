@@ -7,6 +7,7 @@ import '../utils/icon_helper.dart';
 import 'camera_stream_modal.dart';
 import 'tv_control_modal.dart';
 import 'speaker_control_modal.dart';
+import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 
 class VisualRoom extends ConsumerWidget {
   final RoomConfig room;
@@ -82,18 +83,33 @@ class VisualRoom extends ConsumerWidget {
                       ),
 
                     // 3. DISPOSITIVI
-                    ...room.devices.map((device) {
+                    ...room.devices.asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final device = entry.value;
+
                       return Positioned(
                         left: device.x * mapWidth,
                         top: device.y * mapHeight,
-                        child: FractionalTranslation(
-                          translation: const Offset(-0.5, -0.5),
-                          child: _buildDeviceMarker(
-                            context,
-                            ref, // Passiamo ref per i comandi
-                            device,
-                            mapWidth,
-                            mapHeight,
+                        child: AnimationConfiguration.staggeredList(
+                          position: index,
+                          duration: const Duration(milliseconds: 800),
+                          child: FadeInAnimation(
+                            duration: const Duration(milliseconds: 400),
+                            curve: Curves.easeOut,
+                            child: ScaleAnimation(
+                              curve: Curves.easeOutBack,
+                              scale: 0.0,
+                              child: FractionalTranslation(
+                                translation: const Offset(-0.5, -0.5),
+                                child: _buildDeviceMarker(
+                                  context,
+                                  ref,
+                                  device,
+                                  mapWidth,
+                                  mapHeight,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       );
@@ -112,225 +128,128 @@ class VisualRoom extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     DeviceConfig device,
-    double mapWidth,
-    double mapHeight,
+    double mapW,
+    double mapH,
   ) {
-    final entityState = currentStates[device.haEntityId];
-    final bool isOn = IconHelper.isActive(entityState);
-    final Color activeColor = IconHelper.getColor(device.type, entityState);
-    final IconData iconData = IconHelper.getIcon(device.type, entityState);
+    final state = currentStates[device.haEntityId];
+    final bool isOn = IconHelper.isActive(state);
+    final Color activeColor = IconHelper.getColor(device.type, state);
+    final IconData icon = IconHelper.getIcon(device.type, state);
 
-    Widget markerContent;
-
-    // --- COSTRUZIONE GRAFICA (Identica a prima) ---
-    if (device.type == 'sensor') {
-      String val = entityState?['state'] ?? '--';
-      String unit = entityState?['attributes']?['unit_of_measurement'] ?? '';
-
-      markerContent = Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.85),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white24),
-          boxShadow: const [
-            BoxShadow(
-              color: Colors.black54,
-              blurRadius: 8,
-              offset: Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(iconData, size: 14, color: Colors.white70),
-            const SizedBox(width: 6),
-            Text(
-              "$val $unit",
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                fontFamily: 'Outfit',
-              ),
-            ),
-          ],
-        ),
-      );
-    } else {
-      markerContent = AnimatedContainer(
+    Widget marker = GestureDetector(
+      onTap: () {
+        if (!isEditMode) {
+          _handleDeviceTap(context, ref, device, state);
+        }
+      },
+      onLongPress: isEditMode && onDeviceDelete != null
+          ? () => onDeviceDelete!(device.id)
+          : null,
+      child: AnimatedContainer(
         duration: const Duration(milliseconds: 300),
-        width: 50,
-        height: 50,
+        width: 44,
+        height: 44,
+        alignment: Alignment.center,
         decoration: BoxDecoration(
-          shape: BoxShape.circle,
           color: isOn
               ? activeColor.withOpacity(0.2)
-              : Colors.black.withOpacity(0.7),
+              : const Color(0xFF1C1C1E).withOpacity(0.9),
+          shape: BoxShape.circle,
           border: Border.all(
-            color: isEditMode
-                ? Colors.redAccent
-                : (isOn ? activeColor : Colors.white24),
-            width: isEditMode ? 2.5 : 1.5,
+            color: isOn ? activeColor : Colors.white24,
+            width: isOn ? 2.0 : 1.5,
           ),
           boxShadow: isOn
               ? [
                   BoxShadow(
                     color: activeColor.withOpacity(0.6),
-                    blurRadius: 25,
-                    spreadRadius: 5,
-                  ),
-                  BoxShadow(
-                    color: activeColor.withOpacity(0.8),
-                    blurRadius: 10,
+                    blurRadius: 12,
                     spreadRadius: 1,
                   ),
                 ]
               : [
-                  const BoxShadow(
-                    color: Colors.black54,
-                    blurRadius: 8,
-                    spreadRadius: 1,
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.5),
+                    blurRadius: 5,
+                    offset: const Offset(0, 2),
                   ),
                 ],
         ),
-        child: Icon(
-          iconData,
-          color: isEditMode
-              ? Colors.white
-              : (isOn ? Colors.white : Colors.white54),
-          size: 24,
-          shadows: isOn
-              ? [const Shadow(color: Colors.black, blurRadius: 4)]
-              : null,
-        ),
-      );
-    }
+        child: Icon(icon, size: 20, color: isOn ? activeColor : Colors.white54),
+      ),
+    );
 
     if (isEditMode) {
-      markerContent = Stack(
-        clipBehavior: Clip.none,
-        children: [
-          markerContent,
-          Positioned(
-            right: -8,
-            top: -8,
-            child: GestureDetector(
-              onTap: () => onDeviceDelete?.call(device.id),
-              child: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: Colors.red,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                  boxShadow: const [
-                    BoxShadow(color: Colors.black45, blurRadius: 4),
-                  ],
-                ),
-                child: const Icon(Icons.close, size: 14, color: Colors.white),
-              ),
-            ),
-          ),
-        ],
+      return Draggable<int>(
+        data: device.id,
+        onDragStarted: () => onDragStart?.call(device.id),
+        onDragEnd: (details) {
+          final RenderBox parentBox = context
+              .findAncestorRenderObjectOfType<RenderBox>()!;
+          final Offset localOffset = parentBox.globalToLocal(details.offset);
+
+          double newX = localOffset.dx / mapW;
+          double newY = localOffset.dy / mapH;
+
+          newX = newX.clamp(0.0, 1.0);
+          newY = newY.clamp(0.0, 1.0);
+
+          onDragEnd?.call(device.id, newX, newY);
+        },
+        onDragUpdate: (details) {
+          final RenderBox parentBox = context
+              .findAncestorRenderObjectOfType<RenderBox>()!;
+          final Offset localOffset = parentBox.globalToLocal(
+            details.globalPosition,
+          );
+          double newX = localOffset.dx / mapW;
+          double newY = localOffset.dy / mapH;
+          onDeviceMoved?.call(device.id, newX, newY);
+        },
+        feedback: Transform.scale(
+          scale: 1.2,
+          child: Opacity(opacity: 0.9, child: marker),
+        ),
+        childWhenDragging: Opacity(opacity: 0.3, child: marker),
+        child: marker,
       );
     }
 
-    // --- INTERAZIONE UX RAFFINATA ---
-    return GestureDetector(
-      // 1. Quando metti il dito
-      onPanStart: isEditMode ? (_) => onDragStart?.call(device.id) : null,
-
-      // 2. Quando muovi il dito
-      onPanUpdate: isEditMode
-          ? (details) {
-              double dx = details.delta.dx;
-              double dy = details.delta.dy;
-              double newX = (device.x + (dx / mapWidth)).clamp(0.0, 1.0);
-              double newY = (device.y + (dy / mapHeight)).clamp(0.0, 1.0);
-              onDeviceMoved?.call(device.id, newX, newY);
-            }
-          : null,
-      // 3. Quando alzi il dito
-      onPanEnd: isEditMode
-          ? (details) => onDragEnd?.call(device.id, device.x, device.y)
-          : null,
-
-      // TAP SINGOLO: Toggle (Luci) oppure Dettagli (Sensori)
-      onTap: !isEditMode
-          ? () {
-              if (device.type == 'sensor' ||
-                  device.type == 'climate' ||
-                  device.type == 'camera' ||
-                  device.type == 'media_player') {
-                _openDetails(context, device, entityState);
-              } else {
-                ref.read(haServiceProvider).toggleEntity(device.haEntityId);
-              }
-            }
-          : null,
-
-      // TAP PROLUNGATO: Sempre Dettagli
-      onLongPress: !isEditMode
-          ? () => _openDetails(context, device, entityState)
-          : null,
-
-      child: markerContent,
-    );
+    return marker;
   }
 
-  void _openDetails(
+  void _handleDeviceTap(
     BuildContext context,
+    WidgetRef ref,
     DeviceConfig device,
     Map<String, dynamic>? state,
   ) {
-    if (state != null) {
-      // 1. CAMERA -> STREAM
-      if (device.type == 'camera') {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => CameraStreamModal(device: device)),
+    if (state == null) return;
+
+    if (device.type == 'camera') {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => CameraStreamModal(device: device)),
+      );
+    } else if (device.type == 'media_player') {
+      final devClass = state['attributes']['device_class'];
+      if (devClass == 'speaker') {
+        showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (_) =>
+              SpeakerControlModal(device: device, currentState: state),
         );
-        return;
+      } else {
+        showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (_) => TvControlModal(device: device, currentState: state),
+        );
       }
-
-      // 2. TV / MEDIA PLAYER -> TV MODAL
-      if (device.type == 'media_player') {
-         // Controlliamo la device_class dall'entità reale
-         final deviceClass = state['attributes']?['device_class'];
-         
-         // Se è esplicitamente uno speaker o receiver, oppure NON è una TV
-         // (Le Google TV hanno device_class: 'tv')
-         if (deviceClass == 'speaker' || deviceClass == 'receiver' || deviceClass == null) {
-            // Assumiamo Speaker come default se non è tv
-            if (deviceClass == 'tv') {
-               showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  backgroundColor: Colors.transparent,
-                  builder: (_) => TvControlModal(device: device, currentState: state),
-               );
-            } else {
-               showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  backgroundColor: Colors.transparent,
-                  builder: (_) => SpeakerControlModal(device: device, currentState: state),
-               );
-            }
-         } else {
-            // Fallback TV (se deviceClass == 'tv')
-            showModalBottomSheet(
-              context: context,
-              isScrollControlled: true,
-              backgroundColor: Colors.transparent,
-              builder: (_) => TvControlModal(device: device, currentState: state),
-            );
-         }
-         return;
-      }
-
-      // 3. ALTRO -> MODALE STANDARD
+    } else {
       showModalBottomSheet(
         context: context,
         isScrollControlled: true,

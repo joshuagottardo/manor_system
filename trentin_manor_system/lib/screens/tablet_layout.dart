@@ -1,14 +1,18 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../models/app_models.dart';
 import '../services/backend_service.dart';
 import '../providers/app_providers.dart';
 import '../widgets/visual_room.dart';
 import '../widgets/add_device_modal.dart';
 import '../widgets/add_room_modal.dart';
-import '../widgets/modern_glass_card.dart';
+import '../widgets/modern_glass_card.dart'; // Assicurati che questo file supporti opacity custom
 import '../config/app_theme.dart';
 import '../utils/icon_helper.dart';
+import '../widgets/room_transition_wrapper.dart';
+import '../widgets/control_center_panel.dart';
 
 class TabletLayout extends ConsumerStatefulWidget {
   const TabletLayout({super.key});
@@ -20,14 +24,17 @@ class TabletLayout extends ConsumerStatefulWidget {
 class _TabletLayoutState extends ConsumerState<TabletLayout> {
   int? selectedRoomId;
   bool isEditMode = false;
-  
-  // Variabile per il throttling (limitazione chiamate di rete)
   DateTime? _lastNetworkUpdate;
 
-  // --- IL METODO MANCANTE ---
+  @override
+  void initState() {
+    super.initState();
+    // Nasconde status bar per immersione totale (opzionale)
+    // SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
   void _handleNetworkUpdate(int deviceId, double x, double y) {
     final now = DateTime.now();
-    // Se è passato troppo poco tempo dall'ultimo invio (es. 100ms), ignoriamo
     if (_lastNetworkUpdate == null || now.difference(_lastNetworkUpdate!) > const Duration(milliseconds: 100)) {
       BackendService().updateDevicePosition(deviceId, x, y);
       _lastNetworkUpdate = now;
@@ -36,312 +43,282 @@ class _TabletLayoutState extends ConsumerState<TabletLayout> {
 
   @override
   Widget build(BuildContext context) {
-    // 1. Usiamo i provider aggiornati (RoomsNotifier e SocketService)
     final roomsAsync = ref.watch(roomsProvider);
     final entityStatesAsync = ref.watch(entityMapProvider);
     final entityStates = entityStatesAsync.value ?? {};
 
     return Scaffold(
-      extendBodyBehindAppBar: true, 
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        toolbarHeight: 80,
-        title: Text(
-          isEditMode ? "MODALITÀ MODIFICA" : "TRENTIN MANOR",
-          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-            letterSpacing: 3,
-            color: isEditMode ? Colors.redAccent : Colors.white,
-          ),
-        ),
-        actions: [
-          if (isEditMode)
-            _buildGlassIconButton(
-              icon: Icons.delete_forever,
-              color: Colors.redAccent,
-              onPressed: () {
-                 final rooms = roomsAsync.value;
-                 if (rooms != null) {
-                   final currentRoom = rooms.firstWhere((r) => r.id == selectedRoomId, orElse: () => rooms.first);
-                   _deleteRoom(currentRoom);
-                 }
-              },
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          // 1. BACKGROUND: PROFONDITÀ SOTTILE
+          // Un gradiente impercettibile per evitare l'effetto "piatto"
+          Container(
+            decoration: const BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment(0, -0.5),
+                radius: 1.5,
+                colors: [
+                  Color(0xFF1A1A1A), // Grigio scurissimo al centro
+                  Color(0xFF000000), // Nero assoluto ai bordi
+                ],
+              ),
             ),
-          const SizedBox(width: 15),
-          _buildGlassIconButton(
-            icon: isEditMode ? Icons.check : Icons.edit,
-            color: isEditMode ? Colors.greenAccent : Colors.white,
-            onPressed: () => setState(() => isEditMode = !isEditMode),
           ),
-          const SizedBox(width: 30),
-        ],
-      ),
-      
-      // SFONDO
-      body: Container(
-        decoration: const BoxDecoration(
-          color: Colors.black,
-          gradient: RadialGradient(
-            center: Alignment(0, -0.2),
-            radius: 1.2,
-            colors: [Color(0xFF1A1A1A), Colors.black],
-          ),
-        ),
-        child: roomsAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator(color: Colors.white)),
-          error: (err, stack) => Center(child: Text("Errore: $err", style: const TextStyle(color: Colors.red))),
-          data: (rooms) {
-            if (rooms.isEmpty) return const Center(child: Text("Nessuna stanza configurata."));
 
-            final currentRoom = rooms.firstWhere(
-              (r) => r.id == selectedRoomId,
-              orElse: () {
-                Future.microtask(() {
-                  if (mounted && rooms.isNotEmpty) setState(() => selectedRoomId = rooms.first.id);
-                });
-                return rooms.first;
-              },
-            );
+          roomsAsync.when(
+            loading: () => const Center(child: CircularProgressIndicator(color: Colors.white10)),
+            error: (err, stack) => Center(child: Text('Error: $err', style: const TextStyle(color: Colors.red))),
+            data: (rooms) {
+              if (rooms.isEmpty) return _buildEmptyState();
 
-            return Column(
-              children: [
-                const SizedBox(height: 90), // Spazio AppBar
-                
-                // BARRA STANZE
-                SizedBox(
-                  height: 60,
-                  child: ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 40),
-                    itemCount: rooms.length + 1,
-                    itemBuilder: (context, index) {
-                      if (index == rooms.length) {
-                        return Padding(
-                          padding: const EdgeInsets.only(left: 10),
-                          child: _buildGlassIconButton(
-                            icon: Icons.add, 
-                            onPressed: () => _showAddRoomModal(context)
-                          ),
-                        );
-                      }
-                      return _buildRoomTab(rooms[index], currentRoom.id == rooms[index].id);
-                    },
-                  ),
-                ),
+              // Gestione Selezione
+              final currentRoom = selectedRoomId != null 
+                  ? rooms.firstWhere((r) => r.id == selectedRoomId, orElse: () => rooms.first)
+                  : rooms.first;
+              
+              if (selectedRoomId == null) {
+                 WidgetsBinding.instance.addPostFrameCallback((_) {
+                   if(mounted) setState(() => selectedRoomId = currentRoom.id);
+                 });
+              }
 
-                // AREA PRINCIPALE
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(40, 20, 40, 40),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // 1. VISUAL ROOM (La mappa)
-                        Expanded(
-                          flex: 3,
-                          child: ModernGlassCard(
-                            padding: EdgeInsets.zero,
-                            opacity: 0.03,
-                            child: VisualRoom(
-                              room: currentRoom,
-                              isEditMode: isEditMode,
-                              currentStates: entityStates,
-                              
-                              // A. Inizio Drag: Blocca aggiornamenti socket per questo ID
-                              onDragStart: (id) {
-                                ref.read(roomsProvider.notifier).startDragging(id);
-                              },
+              return Column(
+                children: [
+                  const SizedBox(height: 20), // Top Padding (Status Bar area)
 
-                              // B. Movimento: Aggiorna UI locale istantaneamente + Network Throttled
-                              onDeviceMoved: (id, x, y) {
-                                ref.read(roomsProvider.notifier).updateDevicePosition(id, x, y);
-                                _handleNetworkUpdate(id, x, y); // <--- Ora esiste!
-                              },
+                  // 2. HEADER FLUTTUANTE (Navigation Capsule)
+                  _buildFloatingHeader(rooms, currentRoom),
 
-                              // C. Fine Drag: Salva finale e sblocca socket
-                              onDragEnd: (id, x, y) {
-                                ref.read(roomsProvider.notifier).stopDragging();
-                                BackendService().updateDevicePosition(id, x, y);
-                              },
-                              
-                              onDeviceDelete: (id) => _deleteDevice(id),
+                  const SizedBox(height: 20),
+
+                  // 3. WORKSPACE (Split View)
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 10),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // A. LA MAPPA (Main Stage - 60%)
+                          Expanded(
+                            flex: 60,
+                            child: _buildGlassContainer(
+                              child: RoomTransitionWrapper(
+                                itemKey: ValueKey(currentRoom.id),
+                                child: VisualRoom(
+                                  room: currentRoom,
+                                  isEditMode: isEditMode,
+                                  currentStates: entityStates,
+                                  onDragStart: (id) => ref.read(roomsProvider.notifier).startDragging(id),
+                                  onDeviceMoved: (id, x, y) {
+                                    ref.read(roomsProvider.notifier).updateDevicePosition(id, x, y);
+                                    _handleNetworkUpdate(id, x, y);
+                                  },
+                                  onDragEnd: (id, x, y) {
+                                    ref.read(roomsProvider.notifier).stopDragging();
+                                    BackendService().updateDevicePosition(id, x, y);
+                                  },
+                                  onDeviceDelete: _deleteDevice,
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                        
-                        const SizedBox(width: 30),
+                          
+                          const SizedBox(width: 24), // Gap elegante
 
-                        // 2. LISTA DISPOSITIVI
-                        SizedBox(
-                          width: 350,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                "DISPOSITIVI",
-                                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                                  color: Colors.white54,
-                                  letterSpacing: 2,
-                                ),
+                          // B. PANNELLO CONTROLLI (Context - 40%)
+                          Expanded(
+                            flex: 40,
+                            child: _buildGlassContainer(
+                              padding: const EdgeInsets.all(24),
+                              child: ControlCenterPanel(
+                                devices: currentRoom.devices,
+                                isEditMode: isEditMode,
+                                entityStates: entityStates,
+                                onEditModeToggle: () => setState(() => isEditMode = !isEditMode),
+                                onAddDevice: () => _showAddDeviceModal(context, currentRoom),
+                                onDeleteRoom: () => _deleteRoom(currentRoom),
                               ),
-                              const SizedBox(height: 15),
-                              Expanded(
-                                child: ListView.separated(
-                                  padding: EdgeInsets.zero,
-                                  itemCount: currentRoom.devices.length,
-                                  separatorBuilder: (c, i) => const SizedBox(height: 12),
-                                  itemBuilder: (c, i) => _buildDeviceTile(currentRoom.devices[i], entityStates),
-                                ),
-                              ),
-                              if (isEditMode)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 20),
-                                  child: ModernGlassCard(
-                                    onTap: () => _showAddDeviceModal(context, currentRoom),
-                                    opacity: 0.2,
-                                    child: const Center(
-                                      child: Text(
-                                        "+ AGGIUNGI DEVICE",
-                                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                            ],
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 20), // Bottom Padding
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- WIDGETS DESIGN SYSTEM ---
+
+  // Il contenitore base per le due aree principali. 
+  // Simula una lastra di vetro sospesa.
+  Widget _buildGlassContainer({required Widget child, EdgeInsetsGeometry? padding}) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(32), // Curve morbide Apple style
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30), // Blur pesante
+        child: Container(
+          padding: padding ?? EdgeInsets.zero,
+          decoration: BoxDecoration(
+            color: const Color(0xFF1C1C1E).withOpacity(0.4), // Semi-trasparente scuro
+            borderRadius: BorderRadius.circular(32),
+            border: Border.all(
+              color: Colors.white.withOpacity(0.08), // Bordo sottilissimo
+              width: 1,
+            ),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  // L'Header Fluttuante
+  Widget _buildFloatingHeader(List<RoomConfig> rooms, RoomConfig currentRoom) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: SizedBox(
+        height: 60, // Altezza contenuta
+        child: Row(
+          children: [
+            // LOGO / BRAND
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.home_filled, color: Colors.white, size: 20),
+            ),
+            
+            const SizedBox(width: 20),
+
+            // NAVIGATORE STANZE (Pillole)
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(100),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                  child: Container(
+                    height: 50,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.05),
+                      borderRadius: BorderRadius.circular(100),
+                      border: Border.all(color: Colors.white.withOpacity(0.05)),
+                    ),
+                    child: ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                      scrollDirection: Axis.horizontal,
+                      itemCount: rooms.length + 1,
+                      separatorBuilder: (_, __) => const SizedBox(width: 5),
+                      itemBuilder: (context, index) {
+                        // Tasto "+"
+                        if (index == rooms.length) {
+                          return _buildNavPill(
+                            label: "+",
+                            isSelected: false,
+                            onTap: () => showDialog(context: context, builder: (_) => AddRoomModal(onRoomCreated: (_) => ref.refresh(roomsProvider))),
+                            isIcon: true,
+                          );
+                        }
+
+                        final room = rooms[index];
+                        final isSelected = room.id == selectedRoomId;
+                        return _buildNavPill(
+                          label: room.name,
+                          isSelected: isSelected,
+                          onTap: () => setState(() => selectedRoomId = room.id),
+                        );
+                      },
                     ),
                   ),
                 ),
+              ),
+            ),
+
+            const SizedBox(width: 20),
+
+            // INFO DESTRE (Ora, Meteo finto, Edit Indicator)
+            Row(
+              children: [
+                if (isEditMode)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppTheme.accent.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: AppTheme.accent.withOpacity(0.5)),
+                    ),
+                    child: Text(
+                      "EDITING",
+                      style: GoogleFonts.outfit(
+                        color: AppTheme.accent, fontWeight: FontWeight.bold, fontSize: 10, letterSpacing: 1
+                      ),
+                    ),
+                  ),
+                if (!isEditMode)
+                  const Icon(Icons.wifi, color: Colors.white24, size: 18),
               ],
-            );
-          },
+            )
+          ],
         ),
       ),
     );
   }
 
-  // --- WIDGETS DI SUPPORTO ---
-
-  Widget _buildGlassIconButton({required IconData icon, required VoidCallback onPressed, Color color = Colors.white}) {
-    return Container(
-      width: 50,
-      height: 50,
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white.withOpacity(0.1)),
-      ),
-      child: IconButton(
-        icon: Icon(icon, color: color, size: 20),
-        onPressed: onPressed,
-      ),
-    );
-  }
-
-  Widget _buildRoomTab(RoomConfig room, bool isSelected) {
+  // La singola pillola di navigazione
+  Widget _buildNavPill({required String label, required bool isSelected, required VoidCallback onTap, bool isIcon = false}) {
     return GestureDetector(
-      onTap: () => setState(() {
-        selectedRoomId = room.id;
-        isEditMode = false;
-      }),
+      onTap: onTap,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        margin: const EdgeInsets.only(right: 15),
-        padding: const EdgeInsets.symmetric(horizontal: 25, vertical: 12),
-        alignment: Alignment.center, // Centraggio perfetto
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+        padding: EdgeInsets.symmetric(horizontal: isIcon ? 14 : 24),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: isSelected ? Colors.white.withOpacity(0.15) : Colors.white.withOpacity(0.02),
-          borderRadius: BorderRadius.circular(30),
-          border: Border.all(
-            color: isSelected ? Colors.white.withOpacity(0.3) : Colors.white.withOpacity(0.05),
-          ),
+          color: isSelected ? Colors.white : Colors.transparent,
+          borderRadius: BorderRadius.circular(100),
         ),
         child: Text(
-          room.name.toUpperCase(),
-          style: TextStyle(
-            color: isSelected ? Colors.white : Colors.white54,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-            letterSpacing: 1,
-            height: 1.0, // Fix interlinea font
+          isIcon ? label : label.toUpperCase(),
+          style: GoogleFonts.outfit(
+            color: isSelected ? Colors.black : Colors.white54,
+            fontWeight: isSelected ? FontWeight.w800 : FontWeight.w500,
+            fontSize: 12,
+            letterSpacing: 1.5,
           ),
         ),
       ),
     );
   }
 
-  Widget _buildDeviceTile(DeviceConfig device, Map<String, dynamic> entityStates) {
-    final stateData = entityStates[device.haEntityId];
-    final bool isOn = IconHelper.isActive(stateData);
-    final Color color = IconHelper.getColor(device.type, stateData);
-    final IconData icon = IconHelper.getIcon(device.type, stateData);
-
-    return ModernGlassCard(
-      opacity: isOn ? 0.15 : 0.05,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-      child: Row(
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: isOn ? color.withOpacity(0.2) : Colors.transparent,
-              boxShadow: isOn ? [BoxShadow(color: color.withOpacity(0.4), blurRadius: 10)] : [],
-            ),
-            child: Icon(icon, color: isOn ? color : Colors.white38, size: 20),
-          ),
-          const SizedBox(width: 15),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  device.friendlyName,
-                  style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (device.type == 'sensor' || device.type == 'climate')
-                   Text(
-                     "${stateData?['state'] ?? '--'} ${stateData?['attributes']?['unit_of_measurement'] ?? ''}",
-                     style: TextStyle(color: color, fontSize: 12),
-                   )
-              ],
-            ),
-          ),
-          if (device.type != 'sensor')
-             Transform.scale(
-               scale: 0.8,
-               child: Switch(
-                 value: isOn,
-                 activeThumbColor: color,
-                 activeTrackColor: color.withOpacity(0.3),
-                 inactiveThumbColor: Colors.grey,
-                 inactiveTrackColor: Colors.white10,
-                 onChanged: (v) => ref.read(haServiceProvider).toggleEntity(device.haEntityId),
-               ),
-             ),
+          const Icon(Icons.grid_view, size: 60, color: Colors.white12),
+          const SizedBox(height: 20),
+          Text("BENVENUTO A CASA", style: GoogleFonts.outfit(color: Colors.white30, fontSize: 16, letterSpacing: 4)),
+          const SizedBox(height: 40),
+          TextButton(
+             onPressed: () => showDialog(context: context, builder: (_) => AddRoomModal(onRoomCreated: (_) => ref.refresh(roomsProvider))),
+             child: const Text("CREA LA TUA PRIMA STANZA", style: TextStyle(color: AppTheme.accent)),
+          )
         ],
       ),
     );
   }
 
   // --- ACTIONS ---
-
-  void _showAddRoomModal(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppTheme.surface,
-      builder: (context) => AddRoomModal(
-        onRoomCreated: (newRoom) {
-          ref.read(roomsProvider.notifier).refresh(); // Refresh via Notifier
-          setState(() => selectedRoomId = newRoom.id);
-        },
-      ),
-    );
-  }
-
   void _showAddDeviceModal(BuildContext context, RoomConfig room) {
     showModalBottomSheet(
       context: context,
@@ -350,40 +327,37 @@ class _TabletLayoutState extends ConsumerState<TabletLayout> {
       builder: (context) => AddDeviceModal(
         roomId: room.id,
         existingDevices: room.devices,
-        onDeviceAdded: (d) => ref.read(roomsProvider.notifier).refresh(), // Refresh via Notifier
+        onDeviceAdded: (d) {},
       ),
     );
   }
 
   Future<void> _deleteDevice(int deviceId) async {
+    // Implementazione identica a prima...
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: AppTheme.surface,
         title: const Text("Elimina Dispositivo", style: TextStyle(color: Colors.white)),
-        content: const Text("Rimuovere dalla mappa?", style: TextStyle(color: Colors.white70)),
+        content: const Text("Questa azione è irreversibile.", style: TextStyle(color: Colors.white70)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("No")),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Annulla")),
           TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("Elimina", style: TextStyle(color: Colors.red))),
         ],
       ),
     );
-
-    if (confirm == true) {
-      await BackendService().deleteDevice(deviceId);
-      ref.read(roomsProvider.notifier).refresh();
-    }
+    if (confirm == true) await BackendService().deleteDevice(deviceId);
   }
 
   Future<void> _deleteRoom(RoomConfig room) async {
-    final confirm = await showDialog<bool>(
+     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: AppTheme.surface,
         title: const Text("Elimina Stanza", style: TextStyle(color: Colors.white)),
-        content: Text("Eliminare ${room.name} e tutti i dispositivi?", style: const TextStyle(color: Colors.white70)),
+        content: Text("Eliminare ${room.name}?", style: const TextStyle(color: Colors.white70)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("No")),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Annulla")),
           TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("Elimina", style: TextStyle(color: Colors.red))),
         ],
       ),
