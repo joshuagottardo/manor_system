@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 
 class ModernGlassCard extends StatelessWidget {
   final Widget child;
+  final double? width;
+  final double? height;
   final double opacity;
   final double blur;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
-  final VoidCallback? onSecondaryTap; // <--- NUOVO: Per il click destro
+  final VoidCallback? onSecondaryTap;
   final EdgeInsetsGeometry? padding;
   final EdgeInsetsGeometry? margin;
   final double borderRadius;
@@ -16,6 +18,8 @@ class ModernGlassCard extends StatelessWidget {
   const ModernGlassCard({
     super.key,
     required this.child,
+    this.width,
+    this.height,
     this.opacity = 0.05,
     this.blur = 20.0,
     this.onTap,
@@ -45,6 +49,8 @@ class ModernGlassCard extends StatelessWidget {
               highlightColor: Colors.white.withOpacity(0.05),
               borderRadius: BorderRadius.circular(borderRadius),
               child: Container(
+                width: width,
+                height: height,
                 padding: padding ?? const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(opacity),

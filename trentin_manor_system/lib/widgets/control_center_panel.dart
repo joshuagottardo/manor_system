@@ -1,18 +1,23 @@
 import 'dart:ui';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart'; // <--- NUOVA LIBRERIA
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/app_models.dart';
 import '../providers/app_providers.dart';
 import '../services/backend_service.dart';
-import '../utils/icon_helper.dart';
 import 'modern_glass_card.dart';
 import '../config/app_theme.dart';
+
+// Import Modali
 import 'device_control_modal.dart';
 import 'camera_stream_modal.dart';
 import 'tv_control_modal.dart';
 import 'speaker_control_modal.dart';
+
+// IMPORTA IL NUOVO WIDGET
+import 'jiggling_device_tile.dart';
 
 class ControlCenterPanel extends ConsumerStatefulWidget {
   final List<DeviceConfig> devices;
@@ -45,16 +50,14 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
   Future<void> _handleSwap(DeviceConfig source, DeviceConfig target) async {
     if (source.id == target.id) return;
 
-    // 1. Scambiamo le coordinate nel DB
-    // Assegniamo a Source le coordinate di Target e viceversa.
-    // In un layout "packed" questo cambierà il loro ordine di visualizzazione.
-
     final sX = source.gridX;
     final sY = source.gridY;
     final tX = target.gridX;
     final tY = target.gridY;
 
-    // Aggiorniamo backend
+    // Ottimisticamente aggiorna la UI locale (opzionale, se vuoi che sia istantaneo)
+    // setState(() { ... scambia nella lista locale ... });
+
     await BackendService().updateDeviceGridPosition(source.id, tX, tY);
     await BackendService().updateDeviceGridPosition(target.id, sX, sY);
 
@@ -101,140 +104,9 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final sortedDevices = List<DeviceConfig>.from(widget.devices)
-      ..sort((a, b) {
-        if (a.gridY != b.gridY) return a.gridY.compareTo(b.gridY);
-        return a.gridX.compareTo(b.gridX);
-      });
-
-    return Column(
-      children: [
-        Expanded(
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            padding: const EdgeInsets.only(
-              bottom: 100,
-            ), // Spazio per scrollare oltre
-            child: StaggeredGrid.count(
-              crossAxisCount: 4, // 4 Colonne fisse
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 12,
-              children: sortedDevices.map((device) {
-                // Costruiamo il Tile
-                Widget tile = _buildDeviceTile(context, device);
-
-                // Se siamo in Edit Mode, avvolgiamo con Drag & Drop
-                if (widget.isEditMode) {
-                  tile = _buildDraggableWrapper(device, tile);
-                }
-
-                return StaggeredGridTile.count(
-                  crossAxisCellCount: device.gridW,
-                  mainAxisCellCount: device.gridH,
-                  child: tile,
-                );
-              }).toList(),
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-        _buildBottomActions(),
-      ],
-    );
-  }
-
-  // --- WRAPPER DRAG & DROP ---
-  Widget _buildDraggableWrapper(DeviceConfig device, Widget child) {
-    return DragTarget<DeviceConfig>(
-      // 1. "onEnter" non esiste. Usiamo onWillAcceptWithDetails per:
-      //    A. Decidere se accettare il drop (return true/false)
-      //    B. Attivare l'effetto grafico (setState)
-      onWillAcceptWithDetails: (details) {
-        final isDifferent = details.data.id != device.id;
-
-        // Se è un dispositivo diverso (quindi valido per lo scambio), evidenziamo la cella
-        if (isDifferent && _targetDeviceId != device.id) {
-          setState(() => _targetDeviceId = device.id);
-        }
-
-        return isDifferent;
-      },
-
-      // 2. Quando esce dall'area, spegniamo l'effetto grafico
-      onLeave: (_) {
-        if (_targetDeviceId == device.id) {
-          setState(() => _targetDeviceId = null);
-        }
-      },
-
-      // 3. Quando rilascia il dito (DROP avvenuto)
-      onAcceptWithDetails: (details) {
-        _handleSwap(details.data, device);
-        // Resettiamo l'evidenziazione dopo lo scambio
-        setState(() => _targetDeviceId = null);
-      },
-
-      builder: (context, candidateData, rejectedData) {
-        // Controlliamo se QUESTO è il target attivo
-        final bool isHovered = _targetDeviceId == device.id;
-
-        return LongPressDraggable<DeviceConfig>(
-          data: device,
-          delay: const Duration(milliseconds: 200),
-          // Feedback mentre trascini (il "fantasma")
-          feedback: Material(
-            color: Colors.transparent,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 150, maxHeight: 150),
-              child: Opacity(
-                opacity: 0.8,
-                child: ModernGlassCard(
-                  opacity: 0.3,
-                  child: const Center(
-                    child: Icon(Icons.touch_app, color: Colors.white, size: 40),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          // Cosa mostrare al posto dell'originale mentre trascini
-          childWhenDragging: Opacity(opacity: 0.3, child: child),
-          // Il widget normale (con animazione scale se ci passano sopra)
-          child: AnimatedScale(
-            scale: isHovered ? 1.05 : 1.0,
-            duration: const Duration(milliseconds: 200),
-            child: Container(
-              decoration: isHovered
-                  ? BoxDecoration(
-                      border: Border.all(color: AppTheme.accent, width: 2),
-                      borderRadius: BorderRadius.circular(24),
-                      // Aggiungiamo un leggero sfondo per evidenziare meglio
-                      color: AppTheme.accent.withOpacity(0.1),
-                    )
-                  : null,
-              child: child,
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildDeviceTile(BuildContext context, DeviceConfig device) {
-    final stateData = widget.entityStates[device.haEntityId];
-    final bool isOn = IconHelper.isActive(stateData);
-    final Color color = IconHelper.getColor(device.type, stateData);
-    final IconData icon = IconHelper.getIcon(device.type, stateData);
-    final Color iconColor = isOn ? color : const Color(0xFFE0E0E0);
-
-    // --- 1. DEFINIZIONE DEL TIPO DI WIDGET E LOGICA INTERAZIONE ---
-
-    // È una "Tower" 2x4?
+  // --- LOGICA TAP (Semplice vs Complesso) ---
+  VoidCallback _getTapAction(DeviceConfig device) {
     final bool isTower = (device.gridW == 2 && device.gridH == 4);
-
-    // È un dispositivo complesso? (Apre sempre il modale)
     final bool isComplex = [
       'climate',
       'media_player',
@@ -243,352 +115,373 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
       'sensor',
     ].contains(device.type);
 
-    // LOGICA ACTION:
-    // onTap:
-    //  - Se EditMode -> Null (gestito dal wrapper drag)
-    //  - Se Tower -> Null (Il tap singolo non fa nulla al contenitore, faremo pulsanti interni)
-    //  - Se Complesso -> Apre Modale
-    //  - Se Semplice -> Toggle ON/OFF
-    VoidCallback? handleTap;
-    if (!widget.isEditMode) {
-      if (isTower) {
-        handleTap = null;
-      } else if (isComplex) {
-        handleTap = () => _openDeviceDetails(device);
-      } else {
-        handleTap = () =>
-            ref.read(haServiceProvider).toggleEntity(device.haEntityId);
-      }
-    }
+    if (isTower) return () {}; // Tower non fa nulla al tap singolo
+    if (isComplex) return () => _openDeviceDetails(device);
+    return () => ref.read(haServiceProvider).toggleEntity(device.haEntityId);
+  }
 
-    // onLongPress / RightClick:
-    //  - Sempre Apri Modale (eccetto in EditMode)
-    VoidCallback? handleDetails;
-    if (!widget.isEditMode) {
-      handleDetails = () => _openDeviceDetails(device);
-    }
+  @override
+  Widget build(BuildContext context) {
+    final sortedDevices = List<DeviceConfig>.from(widget.devices)
+      ..sort((a, b) {
+        if (a.gridY != b.gridY) return a.gridY.compareTo(b.gridY);
+        return a.gridX.compareTo(b.gridX);
+      });
 
-    // --- 2. COSTRUZIONE CONTENUTO GRAFICO ---
-    Widget innerContent;
-
-    if (device.gridW == 1 && device.gridH == 1) {
-      // 1x1
-      innerContent = Center(
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Icon(icon, color: iconColor, size: 28),
-        ),
-      );
-    } else if (device.gridW == 1 && device.gridH > 1) {
-      // 1x2 (Verticale stretto)
-      innerContent = Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Spacer(),
-          if (device.type == 'light' && isOn)
-            Container(
-              width: 4,
-              height: 30,
-              margin: const EdgeInsets.only(bottom: 8),
-              decoration: BoxDecoration(
-                color: color,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          Icon(icon, color: iconColor, size: 28),
-          const Spacer(),
-        ],
-      );
-    } else if (isTower) {
-      // 2x4 TOWER (Speciale)
-      // Qui in futuro metterai slider e controlli diretti.
-      // Per ora mostriamo icona in alto e nome in basso.
-      innerContent = Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header Torre
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.2),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(icon, color: color, size: 20),
-              ),
-              const Spacer(),
-              const Icon(
-                Icons.more_vert,
-                color: Colors.white24,
-                size: 16,
-              ), // Hint visivo per menu
-            ],
-          ),
-          const Spacer(),
-          Text(
-            device.friendlyName.toUpperCase(),
-            style: GoogleFonts.outfit(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-            ),
-          ),
-          Text(
-            isOn ? "ATTIVO" : "SPENTO",
-            style: GoogleFonts.montserrat(color: Colors.white54, fontSize: 12),
-          ),
-        ],
-      );
-    } else {
-      // STANDARD (2x1, 2x2, etc.)
-      innerContent = Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Icon(icon, color: iconColor, size: 26),
-              if (isOn)
-                Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: color,
-                    shape: BoxShape.circle,
-                    boxShadow: [BoxShadow(color: color, blurRadius: 6)],
+    return Stack(
+      children: [
+        // 1. GRIGLIA SCROLLABILE
+        Positioned.fill(
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.only(
+              bottom: 120,
+              top: 20,
+              left: 12,
+              right: 12,
+            ), // Padding migliorato
+            child: StaggeredGrid.count(
+              crossAxisCount: 4,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              children: sortedDevices.map((device) {
+                // USIAMO IL NUOVO WIDGET JIGGLING
+                return StaggeredGridTile.count(
+                  crossAxisCellCount: device.gridW,
+                  mainAxisCellCount: device.gridH,
+                  child: JigglingDeviceTile(
+                    device: device,
+                    isEditMode: widget.isEditMode,
+                    entityStates: widget.entityStates,
+                    currentHoveredId: _targetDeviceId,
+                    // Callback:
+                    onSwap: _handleSwap,
+                    onHoverChanged: (id) =>
+                        setState(() => _targetDeviceId = id),
+                    onTap: _getTapAction(device),
+                    onLongPress: () => _openDeviceDetails(device),
                   ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Flexible(
-            child: Text(
-              device.friendlyName.toUpperCase(),
-              style: GoogleFonts.outfit(
-                color: Colors.white,
-                fontWeight: FontWeight.w600,
-                fontSize: 11,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+                );
+              }).toList(),
             ),
           ),
-        ],
-      );
-    }
+        ),
 
-    return ModernGlassCard(
-      padding: EdgeInsets.zero,
-      opacity: isOn ? 0.12 : 0.08,
-
-      onTap: handleTap, // Tap: Toggle (Simple) o Modal (Complex) o Null (Tower)
-      onLongPress: handleDetails, // Long: Sempre Modal
-      onSecondaryTap: handleDetails, // Right Click: Sempre Modal
-
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        width: double.infinity,
-        height: double.infinity,
-        decoration: BoxDecoration(
-          color: isOn ? color.withOpacity(0.15) : Colors.transparent,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(
-            color: isOn ? color.withOpacity(0.5) : Colors.transparent,
-            width: 1,
+        // 2. MENU FLUTTUANTE (FAB)
+        Positioned(
+          bottom: 20,
+          right: 12,
+          child: _FloatingMenu(
+            isEditMode: widget.isEditMode,
+            onAdd: widget.onAddDevice,
+            onEditToggle: widget.onEditModeToggle,
+            onDeleteRoom: widget.onDeleteRoom,
           ),
         ),
-        child: Stack(
-          children: [
-            // Contenuto centrato o allineato
-            Positioned.fill(child: innerContent),
+      ],
+    );
+  }
+}
 
-            if (widget.isEditMode)
-              Positioned(
-                right: -8,
-                bottom: -8,
-                child: GestureDetector(
-                  onTap: () => _showResizeDialog(context, device),
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    color: Colors.transparent,
-                    child: Container(
-                      padding: const EdgeInsets.all(6),
-                      decoration: BoxDecoration(
-                        color: Colors.white24,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Icon(
-                        Icons.aspect_ratio,
-                        size: 14,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
+// --- MENU FLUTTUANTE INTELLIGENTE ---
+class _FloatingMenu extends StatefulWidget {
+  final bool isEditMode;
+  final VoidCallback onAdd;
+  final VoidCallback onEditToggle;
+  final VoidCallback? onDeleteRoom;
+
+  const _FloatingMenu({
+    required this.isEditMode,
+    required this.onAdd,
+    required this.onEditToggle,
+    this.onDeleteRoom,
+  });
+
+  @override
+  State<_FloatingMenu> createState() => _FloatingMenuState();
+}
+
+class _FloatingMenuState extends State<_FloatingMenu>
+    with SingleTickerProviderStateMixin {
+  bool _isOpen = false;
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
     );
   }
 
-  // --- ACTIONS & DIALOGS ---
-  Widget _buildBottomActions() {
-    return SizedBox(
-      height: 70,
+  void _toggle() {
+    setState(() {
+      _isOpen = !_isOpen;
+      if (_isOpen) {
+        _controller.forward();
+      } else {
+        _controller.reverse();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Usiamo AnimatedSwitcher per transizione fluida tra MODALITÀ NORMALE e MODALITÀ EDIT
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 300),
+      transitionBuilder: (Widget child, Animation<double> animation) {
+        // Effetto Slide + Fade
+        return FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0.2, 0.0), // Arriva leggermente da destra
+              end: Offset.zero,
+            ).animate(animation),
+            child: child,
+          ),
+        );
+      },
+      child: widget.isEditMode
+          ? _buildEditModeToolbar() // Barra Orizzontale (Editing)
+          : _buildNormalMenu(), // Menu Verticale (Normale)
+    );
+  }
+
+  // --- MODALITÀ EDITING: BARRA ORIZZONTALE ---
+  Widget _buildEditModeToolbar() {
+    return Container(
+      key: const ValueKey("EditToolbar"), // Key per l'animazione
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(
+          0.3,
+        ), // Sfondo scuro leggero per unire i tasti
+        borderRadius: BorderRadius.circular(50),
+        border: Border.all(color: Colors.white10),
+      ),
       child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
+          // 1. TASTO ELIMINA STANZA (Rosso)
+          if (widget.onDeleteRoom != null) ...[
+            _buildCircleBtn(
+              icon: Icons.delete_forever,
+              color: Colors.redAccent,
+              onTap: widget.onDeleteRoom!,
+              tooltip: "Elimina Stanza",
+            ),
+            const SizedBox(width: 8),
+            Container(
+              width: 1,
+              height: 20,
+              color: Colors.white10,
+            ), // Separatore
+            const SizedBox(width: 8),
+          ],
+
+          // 2. TASTO AGGIUNGI (Blu/Bianco)
+          _buildCircleBtn(
+            icon: Icons.add,
+            color: Colors.white,
+            onTap: widget.onAdd,
+            tooltip: "Aggiungi Device",
+          ),
+
+          const SizedBox(width: 12),
+
+          // 3. TASTO FINE (Verde - Sostituisce il menu)
+          GestureDetector(
+            onTap: widget.onEditToggle,
             child: ModernGlassCard(
-              onTap: widget.onEditModeToggle,
-              opacity: widget.isEditMode ? 0.15 : 0.05,
-              child: Center(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      widget.isEditMode ? Icons.check : Icons.edit,
-                      color: widget.isEditMode
-                          ? AppTheme.accent
-                          : Colors.white70,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      widget.isEditMode ? "FATTO" : "MODIFICA",
-                      style: GoogleFonts.outfit(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1,
-                      ),
+              width: 50,
+              height: 50,
+              borderRadius: 25,
+              opacity: 0.2,
+              padding: EdgeInsets.zero,
+              child: Container(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppTheme.accent.withOpacity(0.2),
+                  border: Border.all(color: AppTheme.accent, width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppTheme.accent.withOpacity(0.4),
+                      blurRadius: 10,
                     ),
                   ],
                 ),
+                child: const Icon(Icons.check, color: Colors.white, size: 26),
               ),
             ),
           ),
-          const SizedBox(width: 12),
-          ModernGlassCard(
-            onTap: widget.onAddDevice,
-            opacity: 0.1,
-            child: const Center(child: Icon(Icons.add, color: Colors.white)),
-          ),
-          if (widget.isEditMode && widget.onDeleteRoom != null) ...[
-            const SizedBox(width: 12),
-            ModernGlassCard(
-              onTap: widget.onDeleteRoom,
-              opacity: 0.1,
-              child: const Center(
-                child: Icon(Icons.delete_forever, color: Colors.redAccent),
-              ),
-            ),
-          ],
         ],
       ),
     );
   }
 
-  // --- RESIZE DIALOG ---
-  void _showResizeDialog(BuildContext context, DeviceConfig device) {
-    showDialog(
-      context: context,
-      barrierColor: Colors.black.withOpacity(0.7),
-      builder: (ctx) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: Dialog(
-            backgroundColor: Colors.transparent,
-            insetPadding: const EdgeInsets.all(20),
-            child: ModernGlassCard(
-              opacity: 0.1,
-              blur: 20,
-              padding: const EdgeInsets.all(25),
-              child: Column(
+  // --- MODALITÀ NORMALE: MENU VERTICALE (A SCOMPARSA) ---
+  Widget _buildNormalMenu() {
+    return Column(
+      key: const ValueKey("NormalMenu"),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        // Voci del menu (Modifica, Aggiungi...)
+        // Nota: Qui teniamo solo "Modifica" e "Aggiungi" come shortcut rapida
+        _buildMenuItem(
+          label: "Modifica Griglia",
+          icon: Icons.edit,
+          color: Colors.white,
+          onTap: () {
+            _toggle(); // Chiudi menu verticale
+            widget.onEditToggle(); // Attiva Edit Mode
+          },
+          delay: 1,
+        ),
+
+        _buildMenuItem(
+          label: "Aggiungi",
+          icon: Icons.add,
+          color: AppTheme.accent,
+          onTap: () {
+            _toggle();
+            widget.onAdd();
+          },
+          delay: 0,
+        ),
+
+        const SizedBox(height: 10),
+
+        // FAB PRINCIPALE
+        GestureDetector(
+          onTap: _toggle,
+          child: ModernGlassCard(
+            width: 60,
+            height: 60,
+            borderRadius: 30,
+            opacity: 0.15,
+            padding: EdgeInsets.zero,
+            child: Center(
+              child: RotationTransition(
+                turns: Tween(begin: 0.0, end: 0.25).animate(
+                  CurvedAnimation(parent: _controller, curve: Curves.easeOut),
+                ),
+                child: Icon(
+                  _isOpen ? Icons.add : Icons.grid_view_rounded,
+                  color: Colors.white,
+                  size: 28,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Helper per bottoni circolari nella toolbar orizzontale
+  Widget _buildCircleBtn({
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+    String? tooltip,
+  }) {
+    return Tooltip(
+      message: tooltip ?? "",
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.15),
+            shape: BoxShape.circle,
+            border: Border.all(color: color.withOpacity(0.3), width: 1),
+          ),
+          child: Icon(icon, color: color, size: 22),
+        ),
+      ),
+    );
+  }
+
+  // Helper per voci menu verticale (Codice precedente ottimizzato)
+  Widget _buildMenuItem({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+    required int delay,
+  }) {
+    if (!_isOpen) return const SizedBox.shrink();
+
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final double start = delay * 0.1;
+        final double end = (start + 0.4).clamp(0.0, 1.0);
+        final curve = CurvedAnimation(
+          parent: _controller,
+          curve: Interval(start, end, curve: Curves.easeOutBack),
+        );
+
+        final double scale = curve.value;
+        final double opacity = curve.value.clamp(0.0, 1.0);
+
+        return Transform.scale(
+          scale: scale,
+          alignment: Alignment.bottomRight,
+          child: Opacity(
+            opacity: opacity,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 12, right: 4),
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  Icon(
-                    IconHelper.getIcon(device.type, null),
-                    color: Colors.white54,
-                    size: 40,
-                  ),
-                  const SizedBox(height: 15),
-                  Text(
-                    "DIMENSIONI WIDGET",
-                    style: GoogleFonts.outfit(
-                      color: Colors.white,
-                      fontSize: 14,
-                      letterSpacing: 2,
-                      fontWeight: FontWeight.bold,
+                  Material(
+                    color: Colors.transparent,
+                    child: Text(
+                      label,
+                      style: GoogleFonts.outfit(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        shadows: [
+                          const BoxShadow(color: Colors.black, blurRadius: 4),
+                        ],
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 30),
-
-                  // WRAP CON LE 5 OPZIONI RICHIESTE
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    alignment: WrapAlignment.center,
-                    children: [
-                      // 1. Piccola (1x1)
-                      _ResizeOption(
-                        w: 1,
-                        h: 1,
-                        label: "1x1",
-                        icon: Icons.crop_square,
-                        device: device,
-                        ctx: ctx,
+                  const SizedBox(width: 12),
+                  GestureDetector(
+                    onTap: onTap,
+                    child: Container(
+                      width: 50,
+                      height: 50,
+                      decoration: BoxDecoration(
+                        color: color.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: color.withOpacity(0.5),
+                          width: 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: color.withOpacity(0.3),
+                            blurRadius: 10,
+                            spreadRadius: 1,
+                          ),
+                        ],
                       ),
-
-                      // 2. Orizzontale (2x1) - NUOVA
-                      _ResizeOption(
-                        w: 2,
-                        h: 1,
-                        label: "2x1",
-                        icon: Icons.crop_landscape,
-                        device: device,
-                        ctx: ctx,
-                      ),
-
-                      // 3. Verticale (1x2)
-                      _ResizeOption(
-                        w: 1,
-                        h: 2,
-                        label: "1x2",
-                        icon: Icons.crop_portrait,
-                        device: device,
-                        ctx: ctx,
-                      ),
-
-                      // 4. Grande (2x2)
-                      _ResizeOption(
-                        w: 2,
-                        h: 2,
-                        label: "2x2",
-                        icon: Icons.grid_view,
-                        device: device,
-                        ctx: ctx,
-                      ),
-
-                      // 5. Tower (2x4)
-                      _ResizeOption(
-                        w: 4,
-                        h: 2,
-                        label: "Tower",
-                        icon: Icons.view_week,
-                        device: device,
-                        ctx: ctx,
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 30),
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    child: const Text(
-                      "ANNULLA",
-                      style: TextStyle(color: Colors.white30),
+                      child: Icon(icon, color: Colors.white, size: 22),
                     ),
                   ),
                 ],
@@ -601,6 +494,7 @@ class _ControlCenterPanelState extends ConsumerState<ControlCenterPanel> {
   }
 }
 
+// --- HELPER RESIZE OPTION ---
 class _ResizeOption extends StatelessWidget {
   final int w, h;
   final String label;
@@ -620,6 +514,7 @@ class _ResizeOption extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool isSelected = device.gridW == w && device.gridH == h;
+
     return GestureDetector(
       onTap: () {
         BackendService().updateDeviceGridSize(device.id, w, h);
